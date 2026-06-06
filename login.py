@@ -66,10 +66,23 @@ def login():
         sys.exit(1)
 
     if is_success:
-        # Follow the redirect link manually if present
-        redirect_link = soup.find("a", href=True)
-        if redirect_link:
-            final_resp = scraper.get(redirect_link["href"], timeout=30)
+        # Try meta-refresh first, then find first HTTP anchor
+        redirect_url = None
+        meta = soup.find("meta", attrs={"http-equiv": lambda v: v and v.lower() == "refresh"})
+        if meta and meta.get("content"):
+            parts = meta["content"].split("url=", 1)
+            if len(parts) == 2:
+                redirect_url = parts[1].strip()
+
+        if not redirect_url:
+            for a in soup.find_all("a", href=True):
+                href = a["href"]
+                if href.startswith("http"):
+                    redirect_url = href
+                    break
+
+        if redirect_url:
+            final_resp = scraper.get(redirect_url, timeout=30)
             print(f"URL akhir: {final_resp.url}")
         else:
             print(f"URL akhir: {resp.url}")
