@@ -49,20 +49,34 @@ def login():
     login_url = f"{base_url}member.php?mod=logging&action=login&loginsubmit=yes"
     resp = scraper.post(login_url, data=login_data, timeout=30, allow_redirects=True)
 
-    final_url = resp.url
-    print(f"URL akhir: {final_url}")
+    soup = BeautifulSoup(resp.text, "html.parser")
 
-    if "logging" in final_url or "login" in final_url.lower():
-        soup = BeautifulSoup(resp.text, "html.parser")
-        error_el = (
-            soup.find(class_=["alert_error", "alert_info"])
-            or soup.find(id="messagetext")
-        )
-        msg = error_el.get_text().strip() if error_el else "masih di halaman login"
-        print(f"Login GAGAL: {msg}")
+    # Discuz! shows this text on successful login before JS/meta redirect
+    success_phrases = ["没有自动跳转", "登录成功", "login successful"]
+    is_success = any(p in resp.text for p in success_phrases)
+
+    # Also check for explicit error elements
+    error_el = (
+        soup.find(class_="alert_error")
+        or soup.find(id="messagetext")
+    )
+
+    if error_el and not is_success:
+        print(f"Login GAGAL: {error_el.get_text().strip()}")
         sys.exit(1)
 
-    print("Login BERHASIL.")
+    if is_success:
+        # Follow the redirect link manually if present
+        redirect_link = soup.find("a", href=True)
+        if redirect_link:
+            final_resp = scraper.get(redirect_link["href"], timeout=30)
+            print(f"URL akhir: {final_resp.url}")
+        else:
+            print(f"URL akhir: {resp.url}")
+        print("Login BERHASIL.")
+    else:
+        print(f"Login GAGAL: tidak ada indikator sukses. URL: {resp.url}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
