@@ -1,8 +1,22 @@
 import os
 import sys
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
+from playwright_stealth import stealth_sync
 
 HEADLESS = os.environ.get("HEADLESS", "true").lower() != "false"
+
+
+def wait_for_cloudflare(page, timeout_ms=30000):
+    """Block until Cloudflare 'Just a moment...' challenge passes."""
+    try:
+        page.wait_for_function(
+            "() => !document.title.toLowerCase().includes('just a moment')",
+            timeout=timeout_ms,
+        )
+        page.wait_for_load_state("load", timeout=15000)
+        print("Cloudflare challenge passed.")
+    except PlaywrightTimeoutError:
+        raise RuntimeError("Cloudflare challenge tidak selesai dalam batas waktu.")
 
 
 def login():
@@ -16,7 +30,10 @@ def login():
 
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=HEADLESS)
+            browser = p.chromium.launch(
+                headless=HEADLESS,
+                args=["--disable-blink-features=AutomationControlled"],
+            )
             context = browser.new_context(
                 user_agent=(
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -26,41 +43,39 @@ def login():
                 ignore_https_errors=True,
             )
             page = context.new_page()
+            stealth_sync(page)
 
             print(f"Membuka {forum_url} ...")
             page.goto(forum_url, wait_until="load", timeout=60000)
 
+            if "just a moment" in page.title().lower():
+                print("Cloudflare terdeteksi, menunggu challenge selesai...")
+                wait_for_cloudflare(page)
+
             print(f"Judul halaman : {page.title()}")
             print(f"URL saat ini  : {page.url}")
 
-            page.wait_for_selector('input[name="username"]', timeout=15000)
+            page.wait_for_selector('input[name="username"]', timeout=30000)
             page.fill('input[name="username"]', username)
             page.fill('input[name="password"]', password)
-
-            # Submit via Enter key — most reliable for Discuz! AJAX forms
             page.press('input[name="password"]', "Enter")
 
-            # Give AJAX time to complete then check result
+            # Wait for AJAX redirect to complete
             page.wait_for_timeout(6000)
 
             final_url = page.url
-            title = page.title()
-            print(f"URL setelah submit : {final_url}")
-            print(f"Judul setelah submit: {title}")
-
-            # Check for any visible error/info message on page
-            error_el = page.query_selector(".alert_error, .alert_info, #messagetext, .login_error, .errorhandle")
-            if error_el:
-                msg = error_el.inner_text().strip()
-                print(f"Pesan di halaman: {msg}")
+            print(f"URL akhir: {final_url}")
 
             if "logging" in final_url or "login" in final_url.lower():
-                print("Login GAGAL — masih di halaman login.")
+                error_el = page.query_selector(
+                    ".alert_error, .alert_info, #messagetext, .login_error, .errorhandle"
+                )
+                msg = error_el.inner_text().strip() if error_el else "tidak ada pesan error"
+                print(f"Login GAGAL — {msg}")
                 browser.close()
                 sys.exit(1)
-            else:
-                print("Login BERHASIL.")
 
+            print("Login BERHASIL.")
             browser.close()
 
     except PlaywrightTimeoutError as e:
